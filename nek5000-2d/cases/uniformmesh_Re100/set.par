@@ -1,0 +1,27 @@
+[GENERAL]
+stopAt = numSteps
+timeStepper = BDF2
+variableDt = no
+targetCFL = 0.5
+dt = 5.0e-5
+writeInterval = 4000
+numSteps = 16000
+
+[PROBLEMTYPE]
+equation = incompNS
+axiSymmetry = yes
+swirl = no
+
+[PRESSURE]
+residualtol = 1E-6
+solver = GMRES
+preconditioner = semg_xxt
+residualProj = no
+writeToFieldFile = yes
+
+[VELOCITY]
+density = 1.0
+viscosity = 1.0000000000E-04
+residualtol = 1E-8
+residualProj = no
+writeToFieldFile = yes

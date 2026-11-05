@@ -1,0 +1,163 @@
+// Uniform 3D Pn/Pn NekRS GPU baseline for fixed particles.
+// Stage 4B-1: patched Physalis nodal constraints and explicit validation; NO penalty forcing.
+// Stage2 baseline ran on CUDA; Stage2-1 CUDA confirmed; Stage3 adds GL48x16 3D Lamb extraction.
+// Stage4B injects time-lagged Lamb cage targets into patched elliptic solvers.
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#ifdef __okl__
+#include "np3d.oudf"
+#endif
+
+struct Particle {
+  int id;
+  dfloat x, y, z, radius, vx, vy, vz;
+};
+
+static std::vector<Particle> particles;
+static deviceMemory<dfloat> o_particleData;
+static deviceMemory<dfloat> o_dragDensity;
+static deviceMemory<dfloat> o_particleMask;
+static dfloat UINF=1.0, RHO=1.0, ALPHA=40.0, EPS=0.16;
+static dfloat AX=0, AY=0, AZ=0, A=1.0;
+static int diagnosticsEvery=5;
+#include "gl_sampler.inc"
+#include "stage2_cage.inc"
+#include "stage4_cage.inc"
+#include "stage4b_cage.inc"
+#include "stage4b1_validation.inc"
+
+static void loadParticles()
+{
+  particles.clear();
+  std::ifstream file("particles.csv");
+  if (!file.good()) {
+    particles.push_back({0, AX, AY, AZ, A, 0.0, 0.0, 0.0});
+    return;
+  }
+  std::string line;
+  while (std::getline(file,line)) {
+    if (line.empty() || line[0]=='#') continue;
+    std::replace(line.begin(),line.end(),',',' ');
+    std::istringstream s(line);
+    Particle p;
+    if (!(s>>p.id>>p.x>>p.y>>p.z>>p.radius>>p.vx>>p.vy>>p.vz))
+      throw std::runtime_error("Invalid particles.csv row: "+line);
+    if (p.radius<=0 || !std::isfinite(p.radius) || !std::isfinite(p.x) ||
+        !std::isfinite(p.y) || !std::isfinite(p.z))
+      throw std::runtime_error("Invalid particle geometry");
+    for (const auto &q:particles) {
+      if (p.id==q.id) throw std::runtime_error("Duplicate particle ID");
+      const double dx=p.x-q.x,dy=p.y-q.y,dz=p.z-q.z;
+      const double distance=std::sqrt(dx*dx+dy*dy+dz*dz);
+      if (distance <= p.radius+q.radius+8*EPS)
+        throw std::runtime_error("Particles overlap (including penalization shells)");
+    }
+    particles.push_back(p);
+  }
+  if (particles.empty()) throw std::runtime_error("No particles");
+  if (particles.size()>128) throw std::runtime_error("Max 128 in prototype; batch GPU iteration for larger systems");
+}
+
+void UDF_Setup0(MPI_Comm comm, setupAide &options)
+{
+  platform->par->extract("casedata","freestreamvelocity",UINF);
+  platform->par->extract("casedata","particleradius",A);
+  platform->par->extract("casedata","particlex",AX);
+  platform->par->extract("casedata","particley",AY);
+  platform->par->extract("casedata","particlez",AZ);
+  platform->par->extract("casedata","penaltyalpha",ALPHA);
+  platform->par->extract("casedata","interfacewidth",EPS);
+  platform->par->extract("casedata","diagnosticinterval",diagnosticsEvery);
+  platform->par->extract("casedata","glsamplinginterval",samplingEvery);
+  platform->par->extract("casedata","glsampleradiusovera",qOverA);
+  platform->par->extract("casedata","coefficientbeta",coefficientBeta);
+  std::string physicsModel="penalization";
+  platform->par->extract("casedata","physicsmodel",physicsModel);
+  std::transform(physicsModel.begin(),physicsModel.end(),physicsModel.begin(),
+                 [](unsigned char c){return std::tolower(c);});
+  if(physicsModel!="physalis4b")
+    throw std::runtime_error("Stage4B requires physicsModel=physalis4b");
+  if(!std::getenv("NEKRS_PHYSALIS_CAGE_FILE"))
+    throw std::runtime_error("Stage4B core cage masks disabled; set NEKRS_PHYSALIS_CAGE_FILE and use PATCHED NekRS");
+  int nranks=0;
+  MPI_Comm_size(comm,&nranks);
+  if(nranks!=2 && nranks!=4)
+    throw std::runtime_error("P6 sweep requires 2 or 4 MPI ranks (one per GPU)");
+  options.getArgs("FLUID DENSITY",RHO);
+  options.getArgs("FLUID VISCOSITY",s3Viscosity);
+  if (!(RHO>0 && UINF>0 && A>0 && diagnosticsEvery>0))
+    throw std::runtime_error("Invalid CASEDATA (positive values required)");
+  if(samplingEvery<=0 || qOverA<=1.0) throw std::runtime_error("Invalid GL sampling settings");
+  loadParticles();
+  if(particles.size()!=1 || std::abs(double(particles[0].x))>1e-14 ||
+     std::abs(double(particles[0].y))>1e-14 ||
+     std::abs(double(particles[0].z))>1e-14 ||
+     std::abs(double(particles[0].radius)-1.)>1e-14 ||
+     std::abs(double(particles[0].vx))>1e-14 ||
+     std::abs(double(particles[0].vy))>1e-14 ||
+     std::abs(double(particles[0].vz))>1e-14)
+    throw std::runtime_error("Stage5A nodal mask only supports fixed origin sphere, a=1");
+  if (platform->comm.mpiRank()==0)
+    printf("[STAGE5C] %d MPI ranks; FIXED SPHERE; PATCHED NODAL MASKS; NO PENALIZATION.\n", nranks);
+}
+
+void UDF_LoadKernels(deviceKernelProperties &kernelInfo)
+{
+  kernelInfo.define("p_UINF")=UINF;
+  kernelInfo.define("p_NPARTICLES")=static_cast<int>(particles.size());
+}
+
+void UDF_Setup()
+{
+  auto *mesh=nrs->meshV;
+  cageStage2Setup();
+  std::vector<dfloat> h_data;
+  h_data.reserve(7*particles.size());
+  for (const auto &p:particles) {
+    h_data.insert(h_data.end(),{p.x,p.y,p.z,p.radius,p.vx,p.vy,p.vz});
+  }
+  o_particleData.resize(h_data.size());
+  o_particleData.copyFrom(h_data.data(),h_data.size());
+  o_dragDensity.resize(mesh->Nlocal);
+  o_particleMask.resize(mesh->Nlocal);
+
+  // No particle-resolved hole exists in mesh. This mask is a diagnostic only.
+  np3dMask(mesh->Nlocal, EPS, mesh->o_x,mesh->o_y,mesh->o_z,
+           o_particleData,o_particleMask);
+  nrs->addUserCheckpointField("scalar00",std::vector<deviceMemory<dfloat>>{o_particleMask});
+
+  // Initial condition: uniform through-flow; subsequent velocity set by cage constraints.
+  if (platform->options.getArgs("RESTART FILE NAME").empty()) {
+    np3dInitialVelocity(mesh->Nlocal,nrs->fieldOffset,nrs->fluid->o_solution());
+  }
+  glSetup();
+  s4Setup();
+  s4bSetup();
+  s4b1Setup(); // Original Stage5A CV integrals (diagnostic, includes fictitious solid)
+  nrs->fluid->userPhysalisCage = [](double time,int stage) {
+    s4bApplyTargets(time,stage);
+  };
+  // Stage4B-1 pressure audit callback intentionally not installed.
+  // NO userSource: the volume penalty forcing is removed.
+}
+
+void UDF_ExecuteStep(double time,int tstep)
+{
+  // Validate the PREVIOUS timestep's targets before installing the new ones.
+  s4bCheckAfterSolve(tstep,time);
+  s4b1ControlVolume(tstep,time); // step-by-step Cd_CV and Cd_Lamb candidates
+  glSample(tstep,time);
+  s4bUpdateTargets(tstep,time);
+  if (tstep%10==0 || nrs->lastStep) s4Diagnostics(tstep,time);
+  if (nrs->lastStep) s3Interpolator.reset(); // before MPI_Finalize()
+}

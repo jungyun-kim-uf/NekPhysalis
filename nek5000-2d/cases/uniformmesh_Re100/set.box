@@ -1,0 +1,9 @@
+-2
+1
+# Global-uniform axisymmetric carrier mesh
+# Domain: z/a=[-72,88], r/a=[0,40]
+Box
+-160 -40
+-72.0 88.0 1.0
+0.0 40.0 1.0
+v  ,O  ,A  ,v

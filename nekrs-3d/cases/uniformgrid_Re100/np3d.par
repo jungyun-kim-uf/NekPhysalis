@@ -1,0 +1,54 @@
+# P6 U/P cage 100-way sweep [-16,16]^2 x [-24,24], uniform h/a=8/7
+# Original 2D physical reference: rho=1 g/cm^3, a=0.005 cm, mu=1e-4 g/(cm*s), U_inf=1 cm/s at Re_D=100.
+# NekRS uses fixed reference scales L0=0.005 cm and U0=1 cm/s:
+# rho*=1, a*=1, mu*=0.02 (CONSTANT across Re), U_inf*=U_phys/(1 cm/s).
+# Change freestreamVelocity ONLY in future Re sweeps; keep rho, a, mu fixed.
+# Targets ARE imposed in the patched elliptic solves; no volume penalization.
+userSections = CASEDATA
+
+[GENERAL]
+polynomialOrder = 6
+stopAt = numSteps
+numSteps = 10000
+dt = 0.01
+timeStepper = tombo2
+checkpointInterval = 0
+
+[OCCA]
+backend = CUDA
+
+[MESH]
+file = "np3d.re2"
+
+[FLUID VELOCITY]
+rho = 1.0
+viscosity = 0.02 # FIXED nondimensional dynamic viscosity for ALL Re
+residualTol = 1e-08
+# Boundary conditions come from v and O cbc tags in the genbox .re2
+
+[FLUID PRESSURE]
+residualTol = 1e-07
+
+[CASEDATA]
+# Re_D=100: rho=1, a=1, mu=0.02, U_inf=1.00; Re_D=2*a*rho*U_inf/mu.
+freestreamVelocity = 1.00
+particleRadius = 1.0
+particleX = 0.0
+particleY = 0.0
+particleZ = 0.0
+penaltyAlpha = 0.0 # unused; volume penalty REMOVED
+interfaceWidth = 0.16
+diagnosticInterval = 5
+physicsModel = physalis4b
+verificationInterval = 1
+controlVolumeHalfWidth = 2.2857142857142856
+glSamplingInterval = 1
+# Stage 4B: time-lagged coefficients updated every step
+glSampleRadiusOverA = 1.20
+cageVelocity = Uout-S1
+cagePressure = Pin-S1
+harmonicOrder = 3
+glThetaPoints = 32
+glPhiPoints = 32
+
+coefficientBeta = 0.01

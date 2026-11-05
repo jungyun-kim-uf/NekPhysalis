@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${NEK_SOURCE_ROOT:?Set NEK_SOURCE_ROOT to the Nek5000_physalis_2d root}"
+
+NEK_SOURCE_ROOT="$(cd "$NEK_SOURCE_ROOT" && pwd -P)"
+export NEK_SOURCE_ROOT
+
+echo "NEK_SOURCE_ROOT=$NEK_SOURCE_ROOT"
+echo "FC=${FC:-<Nek default>}"
+echo "CC=${CC:-<Nek default>}"
+echo "LD=${LD:-<Nek default>}"
+echo "FFLAGS=${FFLAGS:-<Nek default>}"
+
+[[ -x "$NEK_SOURCE_ROOT/bin/makenek" ]] || {
+  echo "FATAL: cannot execute $NEK_SOURCE_ROOT/bin/makenek" >&2
+  exit 2
+}
+
+exec "$NEK_SOURCE_ROOT/bin/makenek" "$@"

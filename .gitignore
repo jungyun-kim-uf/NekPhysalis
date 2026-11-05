@@ -1,0 +1,18 @@
+*.o
+*.a
+*.so
+*.mod
+*.log
+*.out
+*.err
+*.f000*
+*.tar
+*.tar.gz
+.cache_gpu/
+build/
+obj/
+__pycache__/
+
+# Backup files
+*.bak
+*~

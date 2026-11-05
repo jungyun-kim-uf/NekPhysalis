@@ -1,0 +1,134 @@
+// NekRS v26.0 OKL kernels. z is the flow direction.
+// Stage5A uses actual patched Physalis cage BCs; legacy volume-penalty kernels below are unused.
+//
+// Particle packed array: [x,y,z,radius,vx,vy,vz] for each particle.
+// q(r) = 0.5 * (1-tanh((r-a)/epsilon))
+// Momentum source = alpha * q * (u_particle-u_fluid) [acceleration].
+#ifdef __okl__
+void udfDirichlet(bcData *bc)
+{
+  if (isField("fluid velocity")) {
+    bc->uxFluid = 0.0;
+    bc->uyFluid = 0.0;
+    bc->uzFluid = p_UINF;
+  }
+}
+
+@kernel void np3dInitialVelocity(const dlong N,
+                                 const dlong fieldOffset,
+                                 @restrict dfloat *U)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    U[i+0*fieldOffset] = 0.0;
+    U[i+1*fieldOffset] = 0.0;
+    U[i+2*fieldOffset] = p_UINF;
+  }
+}
+
+@kernel void np3dForce(const dlong N,
+                       const dlong fieldOffset,
+                       const dfloat alpha,
+                       const dfloat eps,
+                       @restrict const dfloat *X,
+                       @restrict const dfloat *Y,
+                       @restrict const dfloat *Z,
+                       @restrict const dfloat *PART,
+                       @restrict const dfloat *U,
+                       @restrict dfloat *F)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    dfloat fx=0.0, fy=0.0, fz=0.0;
+    for (int pid=0; pid<p_NPARTICLES; ++pid) {
+      const dfloat dx = X[i]-PART[7*pid+0];
+      const dfloat dy = Y[i]-PART[7*pid+1];
+      const dfloat dz = Z[i]-PART[7*pid+2];
+      const dfloat a  = PART[7*pid+3];
+      const dfloat r  = sqrt(dx*dx+dy*dy+dz*dz);
+      const dfloat chi = 0.5*(1.0-tanh((r-a)/eps));
+      fx += alpha*chi*(PART[7*pid+4]-U[i+0*fieldOffset]);
+      fy += alpha*chi*(PART[7*pid+5]-U[i+1*fieldOffset]);
+      fz += alpha*chi*(PART[7*pid+6]-U[i+2*fieldOffset]);
+    }
+    // Replaces the user-supplied momentum source. Not an implicit term.
+    F[i+0*fieldOffset] = fx;
+    F[i+1*fieldOffset] = fy;
+    F[i+2*fieldOffset] = fz;
+  }
+}
+
+@kernel void np3dForceDensity(const dlong N,
+                              const dlong fieldOffset,
+                              const int particleID,
+                              const dfloat alpha,
+                              const dfloat eps,
+                              @restrict const dfloat *X,
+                              @restrict const dfloat *Y,
+                              @restrict const dfloat *Z,
+                              @restrict const dfloat *PART,
+                              @restrict const dfloat *U,
+                              @restrict dfloat *DragPerVolume)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    const dfloat dx=X[i]-PART[7*particleID+0];
+    const dfloat dy=Y[i]-PART[7*particleID+1];
+    const dfloat dz=Z[i]-PART[7*particleID+2];
+    const dfloat r=sqrt(dx*dx+dy*dy+dz*dz);
+    const dfloat chi=0.5*(1.0-tanh((r-PART[7*particleID+3])/eps));
+    // Reaction on particle is -F_on_fluid, per unit density.
+    DragPerVolume[i]=alpha*chi*(U[i+2*fieldOffset]-PART[7*particleID+6]);
+  }
+}
+
+@kernel void np3dMask(const dlong N,
+                      const dfloat eps,
+                      @restrict const dfloat *X,
+                      @restrict const dfloat *Y,
+                      @restrict const dfloat *Z,
+                      @restrict const dfloat *PART,
+                      @restrict dfloat *Mask)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    dfloat chiTotal=0.0;
+    for (int pid=0; pid<p_NPARTICLES; ++pid) {
+      const dfloat dx=X[i]-PART[7*pid+0];
+      const dfloat dy=Y[i]-PART[7*pid+1];
+      const dfloat dz=Z[i]-PART[7*pid+2];
+      const dfloat r=sqrt(dx*dx+dy*dy+dz*dz);
+      chiTotal+=0.5*(1.0-tanh((r-PART[7*pid+3])/eps));
+    }
+    Mask[i]=chiTotal;
+  }
+}
+
+// Actual Stage4B solver-side nodal Dirichlet values. The mask is assembled
+// separately by PATCHED maskedFaceIds() into the elliptic operator.
+@kernel void np3dS4BApplyPressure(
+  const dlong N,
+  @restrict const int *pmask,
+  @restrict const dfloat *target,
+  @restrict dfloat *P)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    if (pmask[i]) P[i]=target[i];
+  }
+}
+
+@kernel void np3dS4BApplyVelocity(
+  const dlong N,
+  const dlong fieldOffset,
+  @restrict const int *vmask,
+  @restrict const dfloat *target,
+  @restrict dfloat *U,
+  @restrict dfloat *Ue)
+{
+  for (dlong i=0; i<N; ++i; @tile(p_blockSize, @outer, @inner)) {
+    if (vmask[i]) {
+      for (int k=0;k<3;++k) {
+        const dlong idx=i+k*fieldOffset;
+        U[idx] =target[idx];
+        Ue[idx]=target[idx];
+      }
+    }
+  }
+}
+#endif

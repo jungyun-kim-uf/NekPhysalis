@@ -1,0 +1,55 @@
+c
+c     Include file to dimension static arrays
+c     and to set some hardwired run-time parameters
+c
+      integer ldim,lx1,lxd,lx2,lx1m,lelg,lelt,lpmin,lpmax,ldimt
+      integer lpelt,lbelt,toteq,lcvelt
+      integer lelx,lely,lelz,mxprev,lgmres,lorder,lhis
+      integer maxobj,lpert,nsessmax,lxo
+      integer lfdm
+
+      ! BASIC
+      parameter (ldim=2)               ! axisymmetric meridional domain
+      parameter (lx1=7)              ! GLL points; P=6
+      parameter (lxd=14)               ! over-integration workspace
+      parameter (lx2=lx1-2)            ! polynomial order for pressure
+
+c     S18 BF-matched NekPhysalis validation, P=6.
+c     Wang Sec.3.1 physical extents adapted to axisym.
+      parameter (lelg=10000)
+      parameter (lpmin=8)              ! min MPI ranks
+      parameter (lpmax=16384)              ! diagnostic MPI ranks
+      parameter (ldimt=3)              ! auxiliary fields
+
+      ! OPTIONAL
+      parameter (lhis=1000)            ! max history points
+      parameter (maxobj=4)             ! max number of objects
+      parameter (lpert=1)              ! max perturbation modes
+      parameter (toteq=5)              ! cmt scalars
+      parameter (nsessmax=2)           ! max sessions
+      parameter (lxo=lx1)              ! output grid
+      parameter (lelx=1,lely=1,lelz=1) ! global tensor mesh dimensions
+      parameter (mxprev=20,lgmres=20)  ! projection/Krylov
+      parameter (lorder=3)             ! max order in time
+
+      parameter (lelt=lelg/lpmin + 8)  ! local elements
+      parameter (lx1m=1)               ! polynomial order mesh solver
+      parameter (lbelt=1)              ! mhd
+      parameter (lpelt=1)              ! linear stability
+      parameter (lcvelt=1)             ! cvode
+      parameter (lfdm=0)  ! == 1 for fast diagonalization method
+
+      ! INTERNALS
+      include 'SIZE.inc'
+
+c automatically added by makenek
+      integer ldimt_proj
+      parameter(ldimt_proj = 1) ! residual projection
+
+c automatically added by makenek
+      integer llpart
+      parameter(llpart = 10000 ) ! Allocation for particles
+
+c automatically added by makenek
+      integer lelr
+      parameter (lelr=lelt) ! restart local elements
